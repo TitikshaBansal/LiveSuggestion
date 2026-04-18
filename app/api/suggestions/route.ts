@@ -23,9 +23,18 @@ function buildUserPrompt(body: {
   earlierTranscript: string;
   previousSuggestions: unknown[];
 }): string {
-  const prev = body.previousSuggestions?.length
-    ? JSON.stringify(body.previousSuggestions, null, 2)
-    : '(none)';
+  // Format each previous card as "- [type] Title — first sentence of preview",
+  // capped at 200 chars. This gives the model enough context to detect
+  // semantic repetition (same underlying gap, different wording) without
+  // blowing up tokens.
+  const prevLines = (body.previousSuggestions ?? []).map((item) => {
+    const c = item as { type?: string; title?: string; preview?: string };
+    const preview = (c.preview ?? '').trim();
+    const firstSentence = preview.split('. ')[0] || preview;
+    const line = `- [${c.type ?? 'unknown'}] ${c.title ?? ''} — ${firstSentence}`;
+    return line.length > 200 ? line.slice(0, 197) + '...' : line;
+  });
+  const prev = prevLines.length ? prevLines.join('\n') : '(none)';
   return [
     `RECENT_TRANSCRIPT:\n${body.recentTranscript || '(silent)'}`,
     `EARLIER_TRANSCRIPT:\n${body.earlierTranscript || '(none)'}`,

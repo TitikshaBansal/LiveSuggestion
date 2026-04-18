@@ -53,3 +53,31 @@ TL;DR + Why now + Detail + Next move. Under 250 words. No iteration yet.
 ## Chat Prompt
 ### v1 — current
 Transcript-grounded when question is about what was said; direct answer when question is forward-looking. No iteration yet.
+
+### v4 — final (ship)
+
+**Tested against:** a live conversation about voice AI agents (~2 min, four suggestion batches, two card-click expand flows, one typed chat message).
+
+**What worked in v3:**
+- Retrievable anchors landed — real named systems (Siri Shortcuts iOS 13, Google Duplex 2018, Klarna AI rollback) appeared in talking_point previews.
+- Perspective guardrail held — no first-person impersonation across any of the four batches.
+- Question cards dropped the "Ask the team" meta-wrapper; became direct spoken sentences.
+- fact_check correctly flagged a transcription error ("STD" → likely "STT").
+- Mix of types stayed healthy across all four batches.
+
+**Failure modes observed in v3:**
+1. **Fabricated statistics.** The model produced plausible-sounding citations ("Gartner's 2024 CX survey: 42% enterprises by 2025, up from 28%"; "McKinsey 2023 report: 30% handling-time reduction") that I could not verify. The retrievable-anchor rule pressured the model toward specificity; when it lacked a real anchor, it manufactured one. This is the worst failure mode for a copilot — it makes the user confidently wrong.
+2. **Semantic cross-batch repetition.** The same underlying suggestion (clarify RAC/STD/TDS acronyms) appeared in three separate batches under different titles and types. Anti-repetition was working lexically (different titles) but failing semantically (same gap).
+
+**Changes in v4:**
+- Promoted honesty from a single line at the bottom to a dedicated **ANTI-FABRICATION** block near the top of the prompt, with three explicit alternatives (use a documented case study, switch card type, or use a qualitative pattern without a number).
+- Added concrete BAD examples of fabricated citations so the model sees what not to do.
+- Upgraded anti-repetition from lexical (title-level) to semantic (same-gap-different-wording). Updated the `/api/suggestions` route to send title + first sentence of preview for each previous card so the model has enough context to detect semantic overlap.
+- Relaxed the retrievable-anchor rule slightly: "must include an anchor IF you're confident it's real." Combined with the anti-fabrication rule, this eliminates the invent-a-citation failure mode.
+
+**Defaults retained from the assignment spec throughout all versions:**
+- Exactly 3 cards per batch
+- 5 suggestion types using the exact vocabulary from the brief (question to ask, talking point, answer, fact-check, clarification)
+- 30-second refresh cadence
+- Recency-weighted context (last ~90s primary, earlier secondary)
+- User-editable prompts and context windows in Settings

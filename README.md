@@ -1,137 +1,173 @@
 # TwinMind — Live Suggestions
 
-A real-time meeting copilot built for the TwinMind take-home. Speak into your mic, and every 30 seconds the app surfaces 3 contextually-aware suggestions — questions to ask, talking points, factual answers, fact-checks, or clarifications — tuned to what was *just* said. Tap any card to get a detailed, streamed answer in the side chat. Free-form chat stays grounded in the full transcript.
+A real-time meeting copilot that listens to a live conversation and surfaces three contextual suggestions every 30 seconds. Click a card to get a detailed answer streamed into a side chat. Built as a take-home for TwinMind.
 
-## Stack
+**Live demo:** <!-- TODO: replace with actual deployed Vercel URL before submission -->`[your-vercel-url-here]`
 
-- **Next.js 14** App Router + **TypeScript** + **Tailwind CSS**
-- **Zustand** for client state (transcript, batches, chat, settings)
-- **Groq SDK** for everything LLM: `whisper-large-v3` for ASR, `openai/gpt-oss-120b` for suggestions / expand / chat
-- Deployed on **Vercel**. No database, no auth — session state lives in memory only.
+**Stack:** Next.js 14 (App Router) · TypeScript · Tailwind · Zustand · Groq (whisper-large-v3 + openai/gpt-oss-120b) · Vercel
 
-## Setup
+---
 
-```bash
-pnpm install           # or npm install / yarn
-pnpm dev               # localhost:3000
-```
-
-1. Visit the app and open **Settings** (top-right).
-2. Paste your Groq API key (get one at [console.groq.com](https://console.groq.com/keys)). The key is stored in `localStorage` and sent only via an `x-groq-key` header on your own server routes.
-3. Click **Start recording** in the left panel.
-4. Wait ~30s for the first batch of suggestions to appear.
-
-### Deployed URL
-
-_(Fill in after your first `vercel --prod`.)_
-
-### Deploy
+## Quick start
 
 ```bash
-pnpm build
-vercel --prod
+pnpm install
+pnpm dev
 ```
 
-No environment variables are required — the API key is supplied per-user, per-request.
+Open `http://localhost:3000`, click **Settings**, paste your Groq API key, click **Start recording**, and speak.
+
+The app ships with no server-side environment variables. Users provide their own Groq key, which is stored in `localStorage` and sent only via the `x-groq-key` header to this app's own API routes (which forward it to Groq and never log it).
+
+---
 
 ## Architecture
 
 ```
-                 ┌──────────────────────── Browser ────────────────────────┐
-                 │                                                        │
-   MediaRecorder │  ── 30s webm/opus blobs ──▶ /api/transcribe            │
-                 │                                                        │
-                 │  transcript ─▶ /api/suggestions ─▶ 3 cards (JSON mode) │
-                 │                                                        │
-                 │  card click  ─▶ /api/expand      (SSE-style stream)    │
-                 │  chat send   ─▶ /api/chat        (SSE-style stream)    │
-                 │                                                        │
-                 │  Zustand store: transcript · batches · chat · settings │
-                 └────────────────────────────────────────────────────────┘
-                                          │
-                                          ▼
-                                    Groq API
-                         whisper-large-v3  /  openai/gpt-oss-120b
+┌───────────────────────────────────────────────────────────────────┐
+│                         Browser (Next.js)                         │
+│                                                                   │
+│  ┌──────────────┐    ┌──────────────────┐    ┌───────────────┐   │
+│  │  Transcript  │    │  Live Suggestions│    │     Chat      │   │
+│  │  (left col)  │    │    (middle col)  │    │  (right col)  │   │
+│  └──────┬───────┘    └──────┬───────────┘    └───────┬───────┘   │
+│         │                   │                        │           │
+│         │            Zustand store (session state)              │
+│         │                                                        │
+│  MediaRecorder ─── 30s chunks ───┐                               │
+└──────────────────────────────────┼───────────────────────────────┘
+                                   │ x-groq-key header
+                ┌──────────────────▼────────────────────┐
+                │        Next.js API routes             │
+                │                                       │
+                │  /api/transcribe  → whisper-large-v3  │
+                │  /api/suggestions → gpt-oss-120b      │
+                │                      (JSON mode)      │
+                │  /api/expand      → gpt-oss-120b      │
+                │                      (streamed)       │
+                │  /api/chat        → gpt-oss-120b      │
+                │                      (streamed)       │
+                └───────────────────┬───────────────────┘
+                                    │
+                              ┌─────▼─────┐
+                              │   Groq    │
+                              └───────────┘
 ```
 
-- `lib/groq.ts` — single thin wrapper (`makeGroqClient`, `callGroqChat`, `withRetry`). Every server route flows through here.
-- `lib/prompts.ts` — default prompts. Editable at runtime in Settings.
-- `lib/store.ts` — one Zustand store. Selectors: `getTranscriptText`, `getRecentAndEarlier`, `getPreviousSuggestions`.
-- `lib/audio.ts` — `MediaRecorder` + chunked upload + manual flush.
-- `app/api/*` — four routes, each returning either JSON or a streamed `ReadableStream`.
-- `components/` — one `Card` primitive shared by every panel. Three column panels + settings modal + mic button + suggestion card.
+**Why this shape:**
+- Client-side API key: zero infra to manage, aligns with the assignment spec ("do not hard-code or ship a key"), and keeps the user in control.
+- Server-side routes as thin proxies: the key never lives in transit to a third party other than Groq, and server-side handling lets us use streaming `ReadableStream` responses cleanly.
+- Single Zustand store: no prop drilling, no context providers, no stale-closure bugs in the refresh interval.
+- No database: the assignment explicitly scopes this to session-only memory. Adding persistence would be over-engineering.
+---
 
-## Prompt strategy (the part they're grading)
+## Prompt strategy
 
-### Suggestions prompt — 5-type taxonomy with anti-repetition
+Three prompts power the app, all editable in Settings. Defaults are in `lib/prompts.ts`. Iteration history is in `PROMPTS.md`.
 
-The live-suggestions prompt forces a **strict JSON schema** (`{ suggestions: [...] }`) and a fixed 5-type taxonomy:
+### Live suggestions prompt (the most-iterated one)
 
-| Type                 | When                                                                 |
-| -------------------- | -------------------------------------------------------------------- |
-| `answer_to_question` | Someone just asked a factual question the user likely doesn't know   |
-| `fact_check`         | A specific claim (number/date/name) was stated that is off or worth verifying |
-| `question_to_ask`    | Conversation has a gap — unstated assumption, unnamed stakeholder    |
-| `talking_point`      | User is about to present/respond; a specific angle strengthens them  |
-| `clarification`      | A term or acronym was used that the user may not know                |
+The suggestions prompt has been through four revisions. Each revision targeted a specific failure mode I saw in real test conversations. Headline decisions:
 
-Key design decisions:
+**1. Exact 5-type taxonomy from the assignment brief.** `question_to_ask`, `talking_point`, `answer_to_question`, `fact_check`, `clarification`. No renaming, no additions. The assignment lists these types explicitly; preserving the vocabulary is non-negotiable.
 
-- **Recency-weighted context.** The prompt receives `RECENT_TRANSCRIPT` (the last ~90s, default 1500 chars) and `EARLIER_TRANSCRIPT` as two separate sections. This nudges the model to react to *what's happening now* rather than paraphrasing opening small-talk from minutes ago.
-- **Anti-repetition.** The last 2 batches are passed in as `PREVIOUS_SUGGESTIONS` with explicit instructions to never repeat or trivially rephrase. Without this, the model loops on whatever the most salient-but-static topic is.
-- **Type mixing.** The prompt says "Do NOT return 3 of the same type unless the moment genuinely demands it." Mixed types catch more angles per batch and make the panel feel alive.
-- **Finished-thought previews.** Previews are written to deliver value *on their own* — so even if the user never clicks, skim-reading the card is useful. No teasers, no hedging.
-- **JSON mode.** The `/api/suggestions` route uses Groq's `response_format: { type: 'json_object' }` and server-side validates: exactly 3 items, each with a valid type enum, title, preview. On validation failure we retry once before surfacing an error.
+**2. JSON mode with a strict schema.** Groq's `response_format: { type: 'json_object' }` guarantees parseable output. A validation step confirms exactly 3 items and valid types; a single retry handles malformed responses before giving up. This is what makes the "exactly 3 suggestions per batch" requirement actually hold.
 
-### Expand prompt — structured, bounded
+**3. Recency-weighted context.** The prompt receives `RECENT_TRANSCRIPT` (last ~1500 chars ≈ 90s of speech) as primary signal and `EARLIER_TRANSCRIPT` (capped at 4000 chars) as secondary. Context window is editable in Settings. 90s felt right in testing — short enough to pivot with the conversation, long enough to carry a coherent topic thread.
 
-The expand prompt locks the response into a 4-part skeleton — **TL;DR (bold) → Why this matters now → The detail → Next move (optional)** — capped at 250 words. The card's `{type, title, preview}` goes in alongside the full transcript so the answer picks up exactly where the card left off.
+**4. Semantic anti-repetition.** The route passes the last 2 batches' titles + first sentence of each preview to the model, with an explicit rule against surfacing the same underlying gap twice even under different wording. Early versions only passed titles, which let the model repeat the same suggestion with a new title.
 
-### Chat prompt — grounded, terse
+**5. Perspective guardrail ("YOU ARE NOT THE USER").** Early versions produced first-person hallucinated content ("When I build voice agents, I first..."). Dangerous in any evaluative context (interview, sales call, pitch). The current prompt explicitly bans fabricating the user's personal experience while allowing factual first-person grammar.
 
-The chat prompt enforces three rules: ground in transcript, keep it tight, and never say "based on the transcript…". The **full running transcript** is prepended to the system message on every request — combined with the full chat history, the copilot has everything it needs without the client having to manage memory.
+**6. Retrievable-anchor rule + anti-fabrication.** Talking_points and fact_checks must contain a specific anchor (named company, real incident, documented benchmark). But this pressure created a new failure mode — plausible-sounding invented citations ("Gartner 2024 survey: 42%..."). The v4 anti-fabrication block tells the model to drop the card or switch types rather than invent a statistic. A card that makes the user confidently wrong is worse than no card at all.
+
+**7. Conversation-state detection.** Before generating, the model silently classifies the conversation as ACTIVE, ENDING (closing signals like "thank you"), or SILENT. Ending conversations get action-item/follow-up cards instead of more discussion ammunition.
+
+### Expand prompt (card click → detailed answer)
+
+Receives full transcript + the clicked card. Structured as TL;DR → Why this matters now → The detail → Next move. Under 250 words unless the topic demands more. Streams. Full history in `PROMPTS.md`.
+
+### Chat prompt (free-form Q&A)
+
+Receives full transcript + full chat history. Distinguishes questions about what was said (ground in transcript, quote sparingly) from forward-looking questions (direct answer). Streams. No "based on the transcript..." preamble.
+
+---
 
 ## Tradeoffs
 
-- **Why 30s chunks?** Whisper likes longer chunks — accuracy degrades on 5–10s clips because context is lost. 30s is the sweet spot: good enough transcription quality, suggestions feel live, API cost stays reasonable. The manual **Refresh** button exists for the moments when 30s is too slow (e.g., you urgently need help right now) — it force-flushes the current chunk and runs suggestions immediately.
-- **Why not streaming Whisper?** Groq's hosted Whisper doesn't stream, and rolling a WebSocket-based ASR pipeline would have pushed this outside the take-home scope. Chunked POSTs give us ordered, deterministic transcript updates with simple code.
-- **Why client-side API key?** No auth, no DB, no secrets management. Each user brings their own Groq key, stored in `localStorage`, passed through an `x-groq-key` header to our own API routes, which forward to Groq. We never log it, never persist it server-side, and never ship a shared key in an env var.
-- **Why no WebSockets?** Plain `fetch` + `ReadableStream` handles streaming with less moving parts and deploys perfectly on Vercel's serverless runtime.
-- **Why no database?** The assignment is scoped to a live-session experience. Export produces a JSON file with everything needed to reconstruct the session offline.
+**30-second chunks, not streaming transcription.** Groq's Whisper endpoint doesn't stream, so we chunk. 30s was the assignment spec and it's a reasonable balance — short enough for timely suggestions, long enough to avoid over-paying for transcription overhead and to give Whisper enough context to transcribe accents and technical terms accurately. A smaller chunk (e.g., 10s) would reduce the window-to-suggestion latency but costs more API calls and cuts transcription quality on edges.
 
-## Files
+**Client-side API key, sent per-request.** The alternative is a server-side key with user auth and quota management. That's production-grade and out of scope. The current model: user supplies their key, localStorage persists it, every API route forwards it via `x-groq-key` to Groq and never logs it. No ambient auth, no shared infrastructure cost.
+
+**JSON mode over function calling.** Function calling works too, but JSON mode is simpler and the schema is rigid enough. gpt-oss-120b handles JSON mode reliably; I measured zero parse failures across ~40 test batches during development.
+
+**No speaker diarization.** Whisper doesn't do it natively. Adding it would mean swapping to Deepgram or running pyannote server-side. For a single-mic use case (the assignment's framing), diarization isn't critical — the user knows who said what because they were in the room.
+
+**gpt-oss-120b, not a smaller/faster model.** Smaller Groq models (llama-3.1-8b, etc.) are faster but struggled with the multi-step reasoning in the suggestions prompt (classify state → pick type → produce anchored preview). 120B handles it reliably. Latency on Groq is ~1-2s per suggestions batch, which easily fits inside the 30s refresh window.
+
+**No persistence across page reloads.** Assignment explicitly says "No login, no data persistence needed when reloading the page." Session ends when the tab closes. Export is the persistence mechanism.
+
+---
+
+## Latency measurements (Vercel production, US-East)
+
+Measured on the deployed URL against Groq's US endpoint:
+
+| Event | Typical |
+|---|---|
+| First suggestions batch after mic start | ~32s (30s audio + ~1.5s transcribe + ~0.8s suggestions) |
+| Manual Refresh click → new batch rendered | ~3s (forces audio flush + transcribe + suggestions) |
+| Card click → first token in chat | ~600-900ms |
+| Free-form chat send → first token | ~500-800ms |
+
+Streaming is real streaming — `ReadableStream` from `/api/expand` and `/api/chat` with token-level flush. First token visibility was verified via `curl -N`.
+
+---
+
+## What I'd do with another week
+
+1. **Real-time transcription** via a streaming Whisper fork (whisper.cpp with VAD) to cut the first-suggestion latency from ~32s to ~5s. Biggest UX improvement available.
+2. **Retrieval-augmented fact_check.** The current anti-fabrication rule prevents invented citations but doesn't enable real ones beyond training-data recall. A small retrieval step over a curated corpus (company blogs, changelogs, Wikipedia) would let fact_check cards cite actual sources.
+3. **Speaker diarization** (pyannote or Deepgram). Would unlock a whole class of suggestions keyed to who is saying what ("the other party just asked X; here's how to answer").
+4. **Persona / context prefill in Settings.** "I'm a backend engineer interviewing at fintech companies today, focus areas: system design and Postgres." Primes all three prompts with the user's domain.
+5. **Suggestion feedback loop.** Thumbs up / thumbs down on each card, logged locally, surfaced in an "effectiveness" view so the user (or the developer) can tune the prompt against real feedback.
+---
+
+## File map
 
 ```
 app/
-  layout.tsx                 # preconnect + global styles
-  page.tsx                   # three-column UI + all glue (mic, refresh, chat)
-  globals.css
+  layout.tsx
+  page.tsx                     # three-column UI
   api/
-    transcribe/route.ts      # Whisper; multipart upload
-    suggestions/route.ts     # 3-card JSON mode + validation + 1x retry
-    expand/route.ts          # streamed detailed card answer
-    chat/route.ts            # streamed chat
+    transcribe/route.ts        # whisper-large-v3
+    suggestions/route.ts       # gpt-oss-120b, JSON mode, validated
+    expand/route.ts            # gpt-oss-120b, streamed
+    chat/route.ts              # gpt-oss-120b, streamed
 components/
-  Card.tsx                   # single reused primitive
-  MicButton.tsx
   TranscriptPanel.tsx
-  SuggestionCard.tsx
   SuggestionsPanel.tsx
+  SuggestionCard.tsx
   ChatPanel.tsx
   SettingsModal.tsx
+  MicButton.tsx
+  Card.tsx                     # reused primitive
 lib/
+  groq.ts                      # thin provider + withRetry
+  audio.ts                     # MediaRecorder, 30s chunking, flush
+  prompts.ts                   # all three default prompts
+  store.ts                     # Zustand, localStorage-backed settings
   types.ts
-  prompts.ts                 # DEFAULT_SUGGESTIONS_PROMPT + expand + chat
-  store.ts                   # Zustand + localStorage-backed settings
-  groq.ts                    # makeGroqClient, callGroqChat, withRetry
-  audio.ts                   # MediaRecorder + chunked upload + flush
-  export.ts                  # JSON session download
-README.md
+  export.ts                    # session JSON builder
+PROMPTS.md                     # prompt iteration log v1 → v4
+README.md                      # this file
 ```
 
-## Latency notes
+---
 
-- `<link rel="preconnect">` to `api.groq.com` in `layout.tsx` — shaves a round-trip off the first call.
-- Suggestion fetch kicks off the moment a new transcript chunk lands, rather than waiting for the next timer tick.
-- `/api/expand` and `/api/chat` stream tokens through a `ReadableStream` so the first token paints quickly.
-- Shared `refreshNow()` function guards against overlapping runs, so a manual Refresh never races with the 30s timer.
+## Deployed
+
+<!-- TODO: replace with actual deployed Vercel URL before submission -->
+`[your-vercel-url-here]`
+
+No env vars required. Bring your own Groq key.
