@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body { height: 100%; }
+
+body {
+  background-color: #0b0c0f;
+  color: #e6e7ea;
+  font-feature-settings: "rlig" 1, "calt" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Subtle scrollbars for the three columns. */
+.scroll-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: #2a2d35;
+  border-radius: 4px;
+}
+.scroll-thin::-webkit-scrollbar-track { background: transparent; }
+
+/* Thin visual separator used inside expand/chat markdown-ish bodies. */
+.prose-compact p { margin: 0 0 0.5rem 0; line-height: 1.55; }
+.prose-compact strong { color: #fff; }
+.prose-compact ul { margin: 0 0 0.5rem 1rem; list-style: disc; }
+.prose-compact ol { margin: 0 0 0.5rem 1.25rem; list-style: decimal; }
+.prose-compact code {
+  background: #1b1d23;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+}
