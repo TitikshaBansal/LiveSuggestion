@@ -2,7 +2,7 @@
 
 A real-time meeting copilot that listens to a live conversation and surfaces three contextual suggestions every 30 seconds. Click a card to get a detailed answer streamed into a side chat. Built as a take-home for TwinMind.
 
-**Live demo:** <!-- TODO: replace with actual deployed Vercel URL before submission -->`[your-vercel-url-here]`
+**Live demo:** <!-- TODO: replace with actual deployed Vercel URL before submission -->`https://twin-mind-six.vercel.app/`
 
 **Stack:** Next.js 14 (App Router) · TypeScript · Tailwind · Zustand · Groq (whisper-large-v3 + openai/gpt-oss-120b) · Vercel
 
@@ -124,15 +124,6 @@ Streaming is real streaming — `ReadableStream` from `/api/expand` and `/api/ch
 
 ---
 
-## What I'd do with another week
-
-1. **Real-time transcription** via a streaming Whisper fork (whisper.cpp with VAD) to cut the first-suggestion latency from ~32s to ~5s. Biggest UX improvement available.
-2. **Retrieval-augmented fact_check.** The current anti-fabrication rule prevents invented citations but doesn't enable real ones beyond training-data recall. A small retrieval step over a curated corpus (company blogs, changelogs, Wikipedia) would let fact_check cards cite actual sources.
-3. **Speaker diarization** (pyannote or Deepgram). Would unlock a whole class of suggestions keyed to who is saying what ("the other party just asked X; here's how to answer").
-4. **Persona / context prefill in Settings.** "I'm a backend engineer interviewing at fintech companies today, focus areas: system design and Postgres." Primes all three prompts with the user's domain.
-5. **Suggestion feedback loop.** Thumbs up / thumbs down on each card, logged locally, surfaced in an "effectiveness" view so the user (or the developer) can tune the prompt against real feedback.
----
-
 ## File map
 
 ```
@@ -168,6 +159,6 @@ README.md                      # this file
 ## Deployed
 
 <!-- TODO: replace with actual deployed Vercel URL before submission -->
-`[your-vercel-url-here]`
+`https://twin-mind-six.vercel.app/`
 
 No env vars required. Bring your own Groq key.
